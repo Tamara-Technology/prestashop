@@ -65,8 +65,33 @@ class TamaraPrestashopValidationModuleFrontController extends ModuleFrontControl
     $orderRetrieve = "SELECT `id_order` FROM `" . _DB_PREFIX_ . "orders` WHERE `id_cart`=".$this->context->cart->id."";
     $id_order = Db::getInstance()->getValue($orderRetrieve);
 
-    $orderDetailsRetrieve = 'SELECT `product_name`, `product_quantity` FROM `' . _DB_PREFIX_ . 'order_detail` WHERE `id_order`=' . $id_order;
-    $result = Db::getInstance()->getRow($orderDetailsRetrieve);
+        $orderDetailsRetrieve = 'SELECT `product_name`, `product_quantity`, `product_id` FROM `' . _DB_PREFIX_ . 'order_detail` WHERE `id_order`=' . $id_order;
+        $result = Db::getInstance()->executeS($orderDetailsRetrieve);
+        PrestaShopLogger:: addLog('######');
+        $items_prep = array();
+        foreach($result as $res)
+        {
+            array_push($items_prep, [$res['product_name'], $res['product_quantity'],$res['product_id']]);
+        }
+        $items = array();
+        foreach($items_prep as $it){
+            $product = new Product($it[2], false, $this->context->language->id);
+            $link = new Link();
+            $url = $link->getProductLink($product);
+
+            array_push($items,  [
+                "reference_id" => (string)$reference_id,
+                "type" => "Digital",
+                "name" => $it[0],
+                "sku" => "None",
+                "quantity" => $it[1],
+                "total_amount" => [
+                    "amount" => (string)$total,
+                    "currency" => $this->context->currency->iso_code
+                ],
+                "item_url" => $url
+            ]);
+        }
 
     $body = array(
       "order_reference_id" => $id_order,
@@ -79,19 +104,7 @@ class TamaraPrestashopValidationModuleFrontController extends ModuleFrontControl
       "country_code" => $client_country->iso_code,
       "payment_type" => $_GET['type'],
       "instalments" => (int)$_GET['instalment'],
-      "items" => array(
-        array(
-          "reference_id" => (string)$reference_id,
-          "type" => "Digital",
-          "name" => $result['product_name'],
-          "sku" => "None",
-          "quantity" => $result['product_quantity'],
-          "total_amount" => array(
-            "amount" => (string)$total,
-            "currency" => $this->context->currency->iso_code
-          )
-        )
-      ),
+      "items" => $items,
       "consumer" => array(
         "first_name" => $this->context->customer->firstname ,
         "last_name" => $this->context->customer->lastname,

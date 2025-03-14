@@ -8,6 +8,24 @@ if (!defined('_PS_VERSION_')) {
 
 class TamaraPrestashop extends PaymentModule
 {
+    const COUNTRIES_CURRENCIES_ALLOWED = [
+        'SA' => 'SAR',
+        'AE' => 'AED',
+        'KW' => 'KWD',
+        'BH' => 'BHD',
+        'QA' => 'QAR',
+        'OM' => 'OMR'
+    ];
+
+    const CURRENCIES_COUNTRIES_ALLOWED = [
+        'SAR' => 'SA',
+        'AED' => 'AE',
+        'KWD' => 'KW',
+        'BHD' => 'BH',
+        'QAR' => 'QA',
+        'OMR' => 'OM'
+    ];
+
     protected $_html = '';
     protected $_postErrors = array();
 
@@ -915,6 +933,12 @@ class TamaraPrestashop extends PaymentModule
 
     public function hookHeader()
     {
+        $currentCurrency = strtoupper($this->context->currency->iso_code);
+        if (!isset(self::CURRENCIES_COUNTRIES_ALLOWED[$currentCurrency])) {
+            return false;
+        }
+        $country = self::CURRENCIES_COUNTRIES_ALLOWED[$currentCurrency];
+
         // if a global JS code is needed
         $this->context->controller->addJS($this->_path . 'views/js/main.js', 'all');
         $url = "";
@@ -929,7 +953,7 @@ class TamaraPrestashop extends PaymentModule
         $this->smarty->assign([
             'public_key' => Tools::getValue('public_key', Configuration::get('public_key')),
             'lang' => $this->context->language->iso_code,
-            'country' => Tools::getValue('PS_LOCALE_COUNTRY', Configuration::get('PS_LOCALE_COUNTRY')),
+            'country' => $country,
             'url' => $url,
             'currency' => $this->context->currency->iso_code,
             'installmentWidgetUrl' => $installmentWidgetUrl
@@ -1101,6 +1125,7 @@ class TamaraPrestashop extends PaymentModule
         $this->context->smarty->assign('lang', $this->context->language->iso_code);
         $this->context->smarty->assign('country', Tools::getValue('PS_LOCALE_COUNTRY', Configuration::get('PS_LOCALE_COUNTRY')));
         $this->context->smarty->assign('currency', $this->context->currency->iso_code);
+        $this->context->smarty->assign('configData',['badgePosition' => '', 'showExtraContent' => 'full', 'hidePayInX' => false]);
 
         PrestaShopLogger::addLog('  ' . $payment_options_count);
         PrestaShopLogger::addLog('  ' . $single_checkout_enabled);
@@ -1123,6 +1148,7 @@ class TamaraPrestashop extends PaymentModule
             PrestaShopLogger::addLog('Single enabled');
             if ($type == "PAY_NOW" || $type == "PAY_NEXT_MONTH") {
                 $externalOption->setCallToActionText($label)
+                ->setAdditionalInformation($this->context->smarty->fetch('module:tamaraprestashop/views/templates/front/pif.tpl'))
                     ->setAction($this->context->link->getModuleLink($this->name, 'validation', array('type' => $type, 'instalment' => $instalment), true))
                     ->setLogo(Media::getMediaPath($logoURL));
             } else {

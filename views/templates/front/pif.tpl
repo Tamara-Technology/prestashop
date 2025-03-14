@@ -1,0 +1,1 @@
+<tamara-widget type="tamara-card-snippet" lang="ar" country="SA" ></tamara-widget>
