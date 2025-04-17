@@ -764,9 +764,6 @@ class TamaraPrestashop extends PaymentModule
                 foreach ($value as $k => $v) {
                     if ($k == 'name' && ($v == 'Shipped' || $v == 'Canceled')) {
                         $newStatus = $newStatus . "" . $v;
-                        break;
-                    } else {
-                        break 2;
                     }
                 }
             }
