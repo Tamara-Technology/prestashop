@@ -1,5 +1,7 @@
 <?php
 
+require_once _PS_MODULE_DIR_ . 'tamaraprestashop/TamaraConfiguration.php';
+
 class tamaraprestashopCallbackModuleFrontController extends ModuleFrontController
 {
 
@@ -11,52 +13,98 @@ class tamaraprestashopCallbackModuleFrontController extends ModuleFrontControlle
 
     public function postProcess()
     {
-        $sql = 'SELECT `id_order`  FROM `' . _DB_PREFIX_ . 'tamara` WHERE `order_id`="'.$_GET['orderId'].'"';
-        $id_order = Db::getInstance()->getValue($sql);
-        $this->context->smarty->assign(['id_order' => $id_order,
-        'status' => $_GET['paymentStatus']
+        $orderId       = Tools::getValue('orderId');
+        $paymentStatus = Tools::getValue('paymentStatus');
+
+        if (!$orderId || !$paymentStatus) {
+            PrestaShopLogger::addLog('Missing orderId or paymentStatus');
+            return;
+        }
+
+        // Get PrestaShop order ID safely
+        $idOrder = (int) Db::getInstance()->getValue(
+            'SELECT id_order FROM ' . _DB_PREFIX_ . 'tamara WHERE order_id = "' . pSQL($orderId) . '"'
+        );
+
+        if (!$idOrder) {
+            PrestaShopLogger::addLog('Order not found for Tamara orderId: ' . $orderId);
+            return;
+        }
+
+        $this->context->smarty->assign([
+            'id_order' => $idOrder,
+            'status'   => $paymentStatus,
         ]);
 
-        $mode = Tools::getValue('mode', Configuration::get('mode'));
-    $prod = "https://api.tamara.co/";
-    $sandbox = "https://api-sandbox.tamara.co/";
+        $order = new Order($idOrder);
+        if (!Validate::isLoadedObject($order)) {
+            PrestaShopLogger::addLog('Invalid Order object: ' . $idOrder);
+            return;
+        }
 
-        if(isset($_GET['paymentStatus']) && $_GET['paymentStatus'] == 'approved') {
-            PrestaShopLogger::addLog("11111111111111");
+        // Resolve environment
+        $mode    = (int) TamaraConfiguration::get('mode');
+        $baseUrl = ($mode === 1)
+            ? 'https://api-sandbox.tamara.co/'
+            : 'https://api.tamara.co/';
 
-            $endpoint = "";
-        if ( $mode == 1){
-            $endpoint .= $sandbox . "orders/" . $_GET['orderId'] . "/authorise";
-          } elseif($mode == 2) {
-            $endpoint .= $prod . "orders/" . $_GET['orderId'] . "/authorise";
-          } else {
-            $endpoint .= $prod . "orders/" . $_GET['orderId'] . "/authorise";
-          }
+        switch ($paymentStatus) {
 
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $endpoint);
-        curl_setopt($ch, CURLOPT_POST, true);
-        curl_setopt(
-            $ch, CURLOPT_HTTPHEADER,
-            array(
-                'Content-Type: application/json',
-                'Authorization: Bearer '.Tools::getValue('api_token', Configuration::get('api_token')),
-            )
-        );
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            case 'approved':
+                PrestaShopLogger::addLog('Tamara payment approved: ' . $orderId);
 
-        $result = curl_exec($ch);
-        curl_close($ch);
-        PrestaShopLogger::addLog("first CONDITION");
+                // Call Tamara authorise endpoint
+                $endpoint = $baseUrl . 'orders/' . $orderId . '/authorise';
 
-        $updateOrders = 'UPDATE ' . _DB_PREFIX_ . 'orders SET current_state = 2 WHERE id_order ='.$id_order;
-        Db::getInstance()->execute($updateOrders);
-        } elseif (($_GET['paymentStatus'] == 'declined') || ($_GET['paymentStatus'] == 'expired') || ($_GET['paymentStatus'] == 'canceled')) {
-            PrestaShopLogger::addLog("2nd CONDITION ");
-        $updateOrders = 'UPDATE ' . _DB_PREFIX_ . 'orders SET current_state = 8 WHERE id_order ="'.$id_order.'"';
-        Db::getInstance()->execute($updateOrders);
-        return true;
-       }
+                $ch = curl_init($endpoint);
+                curl_setopt_array($ch, [
+                    CURLOPT_POST           => true,
+                    CURLOPT_RETURNTRANSFER => true,
+                    CURLOPT_HTTPHEADER     => [
+                        'Content-Type: application/json',
+                        'Authorization: Bearer ' . TamaraConfiguration::get('api_token'),
+                    ],
+                ]);
+
+                $response = curl_exec($ch);
+                curl_close($ch);
+
+                PrestaShopLogger::addLog('Tamara authorise response: ' . $response);
+
+                // update order state
+                if ((int) $order->current_state !== (int) Configuration::get('PS_OS_PAYMENT')) {
+                    $history = new OrderHistory();
+                    $history->id_order = $order->id;
+                    $history->changeIdOrderState(
+                        (int) Configuration::get('PS_OS_PAYMENT'),
+                        $order->id
+                    );
+                    $history->addWithemail(true);
+                }
+                break;
+
+            case 'declined':
+            case 'expired':
+            case 'canceled':
+                PrestaShopLogger::addLog('Tamara payment rejected: ' . $orderId);
+
+                if ((int) $order->current_state !== (int) Configuration::get('PS_OS_CANCELED')) {
+                    $history = new OrderHistory();
+                    $history->id_order = $order->id;
+                    $history->changeIdOrderState(
+                        (int) Configuration::get('PS_OS_CANCELED'),
+                        $order->id
+                    );
+                    $history->addWithemail(false);
+                }
+                break;
+
+            default:
+                PrestaShopLogger::addLog('Unhandled payment status: ' . $paymentStatus);
+                break;
+        }
+
         $this->setTemplate('module:tamaraprestashop/views/templates/front/payment_infos.tpl');
+
     }
 }
