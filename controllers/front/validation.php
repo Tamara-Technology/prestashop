@@ -20,10 +20,7 @@ class TamaraPrestashopValidationModuleFrontController extends ModuleFrontControl
     $this->context->cookie->__unset('single_checkout_enabled');
     $this->context->cookie->__unset('payment_options_count');
 
-    $phone = '';
-    if (isset($address->phone)){
-      $phone .= $address->phone;
-    }
+    $phone = $this->module->getCustomerPhone($address, $this->context->currency->iso_code);
 
     if ($cart->id_customer == 0 || $cart->id_address_delivery == 0 || $cart->id_address_invoice == 0 || !$this->module->active) {
       Tools::redirect('index.php?controller=order&step=1');

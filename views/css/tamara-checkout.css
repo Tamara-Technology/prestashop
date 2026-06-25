@@ -1,0 +1,138 @@
+/**
+ * Tamara checkout payment option layout: [radio] [logo] [text]
+ */
+.payment-options .payment-option.tamara-payment-option,
+body#checkout .payment-options .payment-option.tamara-payment-option {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 10px !important;
+  margin-bottom: 0.5rem;
+}
+
+.payment-options .payment-option.tamara-payment-option .custom-radio,
+body#checkout .payment-options .payment-option.tamara-payment-option .custom-radio,
+.payment-options .payment-option.tamara-payment-option .custom-radio.float-xs-left {
+  float: none !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  flex-shrink: 0 !important;
+  margin: 0 !important;
+}
+
+.payment-options .payment-option.tamara-payment-option label,
+body#checkout .payment-options .payment-option.tamara-payment-option label {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  gap: 10px !important;
+  width: auto !important;
+  max-width: 100% !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  vertical-align: middle !important;
+}
+
+.payment-options .payment-option.tamara-payment-option .tamara-payment-label__content,
+body#checkout .payment-options .payment-option.tamara-payment-option .tamara-payment-label__content {
+  display: inline-flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  flex-wrap: nowrap !important;
+  gap: 10px !important;
+  width: auto !important;
+  max-width: 100% !important;
+}
+
+.payment-options .payment-option.tamara-payment-option .tamara-payment-label__content > img,
+.payment-options .payment-option.tamara-payment-option .tamara-payment-label__logo,
+body#checkout .payment-options .payment-option.tamara-payment-option .tamara-payment-label__content > img,
+body#checkout .payment-options .payment-option.tamara-payment-option .tamara-payment-label__logo {
+  display: inline-block !important;
+  flex: 0 0 auto !important;
+  order: 1 !important;
+  height: 32px !important;
+  width: auto !important;
+  max-width: 96px !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  float: none !important;
+  vertical-align: middle !important;
+}
+
+.payment-options .payment-option.tamara-payment-option .tamara-payment-label__content > span,
+.payment-options .payment-option.tamara-payment-option .tamara-payment-label__text,
+body#checkout .payment-options .payment-option.tamara-payment-option .tamara-payment-label__content > span,
+body#checkout .payment-options .payment-option.tamara-payment-option .tamara-payment-label__text {
+  display: inline !important;
+  flex: 0 1 auto !important;
+  order: 2 !important;
+  font-size: 14px;
+  line-height: 1.4;
+  white-space: normal;
+ 
+}
+
+.payment-option.tamara-is-unavailable {
+  pointer-events: none;
+  cursor: not-allowed;
+}
+
+.payment-option.tamara-is-unavailable .custom-radio {
+  opacity: 0.45 !important;
+}
+
+.payment-option.tamara-is-unavailable label {
+  cursor: not-allowed;
+  opacity: 0.3 !important;
+}
+
+.payment-option.tamara-is-unavailable .tamara-payment-label__content {
+  opacity: 0.3 !important;
+}
+
+.payment-option.tamara-is-unavailable .tamara-payment-label__text,
+.payment-option.tamara-is-unavailable .tamara-payment-label__content > span,
+.payment-option.tamara-is-unavailable label > span:not(.tamara-payment-label__content) {
+  order: 1 !important;
+  color: #6b7280 !important;
+}
+
+.payment-option.tamara-is-unavailable .tamara-payment-label__highlight {
+  background-color: #dbeafe;
+  color: #9ca3af;
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+.payment-option.tamara-is-unavailable .custom-radio input[type="radio"] {
+  cursor: not-allowed;
+}
+
+.payment-option.tamara-is-unavailable .custom-radio input[type="radio"]:disabled + span {
+  border-color: #d1d5db;
+  background: #f9fafb;
+  opacity: 1 !important;
+}
+
+.payment-option.tamara-is-unavailable .tamara-payment-label__logo,
+.payment-option.tamara-is-unavailable .tamara-payment-label__content > img,
+.payment-option.tamara-is-unavailable label > img {
+  order: 2 !important;
+  filter: none !important;
+}
+
+body#checkout .payment-options .js-additional-information:has([data-tamara-unavailable="1"]) {
+  display: none !important;
+}
+
+html[lang="ar"] .payment-options .payment-option.tamara-payment-option .tamara-payment-label__content,
+html[lang="ar"] body#checkout .payment-options .payment-option.tamara-payment-option .tamara-payment-label__content {
+  flex-direction: row !important;
+  text-align: right;
+}
+
+html[lang="ar"] .payment-options .payment-option.tamara-payment-option .tamara-payment-label__text,
+html[lang="ar"] body#checkout .payment-options .payment-option.tamara-payment-option .tamara-payment-label__text {
+  text-align: right;
+}

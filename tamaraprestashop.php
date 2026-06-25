@@ -11,6 +11,12 @@ class TamaraPrestashop extends PaymentModule
 {
 
     protected $_html = '';
+
+    const ELIGIBILITY_TIMEOUT_PRODUCTION_MS = 200;
+    const ELIGIBILITY_TIMEOUT_SANDBOX_MS = 3000;
+    const ELIGIBILITY_FALLBACK_EMAIL = 'precheck-fallback@example.com';
+    const PAYMENT_OPTIONS_CACHE_TTL = 300;
+
     public function __construct()
     {
         $this->name = 'tamaraprestashop';
@@ -356,6 +362,13 @@ class TamaraPrestashop extends PaymentModule
         }
     }
 
+    private function getEligibilityTimeoutMs()
+    {
+        return (int) TamaraConfiguration::get('mode', 1) === 1
+            ? self::ELIGIBILITY_TIMEOUT_SANDBOX_MS
+            : self::ELIGIBILITY_TIMEOUT_PRODUCTION_MS;
+    }
+
     public function addOrderState($name)
     {
         $state_exist = false;
@@ -592,9 +605,46 @@ class TamaraPrestashop extends PaymentModule
         return $this->hookHeader($params);
     }
 
+    private function isCheckoutPage()
+    {
+        if (!isset($this->context->controller)) {
+            return false;
+        }
+
+        $controller = $this->context->controller;
+        if ($controller instanceof OrderControllerCore) {
+            return true;
+        }
+        if (isset($controller->php_self) && $controller->php_self === 'order') {
+            return true;
+        }
+        if (Tools::getValue('controller') === 'order') {
+            return true;
+        }
+
+        $requestUri = isset($_SERVER['REQUEST_URI']) ? (string) $_SERVER['REQUEST_URI'] : '';
+        if (strpos($requestUri, '/order') !== false) {
+            return true;
+        }
+
+        return false;
+    }
+
     public function hookHeader()
     {
-        // if a global JS code is needed
+        if ($this->isCheckoutPage()) {
+            $this->context->controller->registerStylesheet(
+                'module-tamaraprestashop-checkout',
+                'modules/' . $this->name . '/views/css/tamara-checkout.css',
+                ['media' => 'all', 'priority' => 200]
+            );
+            $this->context->controller->registerJavascript(
+                'module-tamaraprestashop-checkout',
+                'modules/' . $this->name . '/views/js/tamara-checkout.js',
+                ['position' => 'bottom', 'priority' => 200]
+            );
+        }
+
         $this->context->controller->addJS($this->_path . 'views/js/main.js', 'all');
         $url = "";
         $installmentWidgetUrl = "";
@@ -632,113 +682,426 @@ class TamaraPrestashop extends PaymentModule
         $this->smarty->assign('total_in_cart', $params['presentedCart']['totals']['total']['amount']);
     }
 
+    public function getCustomerPhone(Address $address, $currency = null)
+    {
+        $phone = trim((string) $address->phone);
+        if ($phone === '') {
+            $phone = trim((string) $address->phone_mobile);
+        }
+
+        return $this->normalizePhoneNumber($phone, $currency);
+    }
+
+    public function normalizePhoneNumber($phone, $currency = null)
+    {
+        $phone = trim((string) $phone);
+        $phone = str_replace(' ', '', $phone);
+
+        if ($phone === '') {
+            return '';
+        }
+
+        $phone = preg_replace('/\D/', '', $phone);
+
+        if ($phone === '') {
+            return '';
+        }
+
+        if (strpos($phone, '966') === 0 || strpos($phone, '971') === 0) {
+            return $phone;
+        }
+
+        $phone = ltrim($phone, '0');
+
+        if ($phone === '') {
+            return '';
+        }
+
+        if (strpos($phone, '5') !== 0) {
+            return $phone;
+        }
+
+        $currency = strtoupper((string) $currency);
+        if ($currency === 'SAR') {
+            return '966' . $phone;
+        }
+        if ($currency === 'AED') {
+            return '971' . $phone;
+        }
+
+        return $phone;
+    }
+
+    private function getCustomerEmail(Customer $customer)
+    {
+        $email = trim((string) $customer->email);
+
+        return Validate::isEmail($email) ? $email : self::ELIGIBILITY_FALLBACK_EMAIL;
+    }
+
+    private function getMerchantCountryIso()
+    {
+        $shopCountryId = (int) Configuration::get('PS_COUNTRY_DEFAULT');
+        if ($shopCountryId) {
+            return strtoupper(Country::getIsoById($shopCountryId));
+        }
+
+        $address = new Address((int) $this->context->cart->id_address_delivery);
+        if (Validate::isLoadedObject($address)) {
+            return strtoupper((new Country((int) $address->id_country))->iso_code);
+        }
+
+        return 'SA';
+    }
+
+    private function getCountryPaymentLabels($countryIso)
+    {
+        $countryIso = strtoupper($countryIso);
+
+        if ($countryIso === 'SA') {
+            return [
+                'title_en' => 'Tamara',
+                'subtitle_en' => 'Monthly Payments. Sharia Compliant.',
+                'title_ar' => 'تمارا',
+                'subtitle_ar' => 'دفعات شهرية. متوافقة مع الشريعة',
+            ];
+        }
+
+        if ($countryIso === 'AE') {
+            return [
+                'title_en' => 'Tamara',
+                'subtitle_en' => 'Monthly Payments',
+                'title_ar' => 'تمارا',
+                'subtitle_ar' => 'دفعات شهريه',
+            ];
+        }
+
+        return [
+            'title_en' => 'Tamara',
+            'subtitle_en' => 'Monthly Payments',
+            'title_ar' => 'تمارا',
+            'subtitle_ar' => 'دفعات شهريه',
+        ];
+    }
+
+    private function getPaymentLabelForDisplay($countryIso, $includeSubtitle = true, $currencyIso = null)
+    {
+        if ($currencyIso === null) {
+            $currencyIso = $this->context->currency->iso_code;
+        }
+        $currencyIso = strtoupper((string) $currencyIso);
+        $isAr = $this->context->language->iso_code === 'ar';
+
+        if ($currencyIso === 'AED') {
+            if (!$includeSubtitle) {
+                return $isAr ? 'تمارا' : 'Tamara';
+            }
+
+            return $isAr ? 'دفعات شهريه' : 'Monthly Payments';
+        }
+
+        $labels = $this->getCountryPaymentLabels($countryIso);
+        $title = $isAr ? $labels['title_ar'] : $labels['title_en'];
+
+        if (!$includeSubtitle) {
+            return $title;
+        }
+
+        $subtitle = $isAr ? $labels['subtitle_ar'] : $labels['subtitle_en'];
+
+        return $subtitle;
+    }
+
+    private function getTamaraLogoUrl()
+    {
+        return $this->context->language->iso_code === 'ar'
+            ? 'https://cdn.tamara.co/widget-v2/assets/tamara-grad-ar.ab6b918f.svg'
+            : 'https://cdn.tamara.co/widget-v2/assets/tamara-grad-en.a044e01d.svg';
+    }
+
+    /**
+     * @return string eligible|ineligible|timeout
+     */
+    private function checkPreCheckoutEligibility($amount, $currency, $phone, $email)
+    {
+        $payload = [
+            'order' => [
+                'amount' => (float) $amount,
+                'currency' => $currency,
+            ],
+            'customer' => [
+                'phone' => $phone,
+                'email' => $email,
+            ],
+        ];
+
+        $endpoint = $this->getMode('pre-checkout/v1/eligibility');
+        $timeoutMs = $this->getEligibilityTimeoutMs();
+
+        PrestaShopLogger::addLog(
+            'Tamara pre-checkout eligibility request: '
+            . json_encode([
+                'endpoint' => $endpoint,
+                'timeout_ms' => $timeoutMs,
+                'payload' => $payload,
+            ])
+        );
+
+        $ch = curl_init($endpoint);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => json_encode($payload),
+            CURLOPT_HTTPHEADER => [
+                'Content-Type: application/json',
+                'Authorization: Bearer ' . TamaraConfiguration::get('api_token'),
+            ],
+            CURLOPT_CONNECTTIMEOUT_MS => $timeoutMs,
+            CURLOPT_TIMEOUT_MS => $timeoutMs,
+        ]);
+
+        $response = curl_exec($ch);
+        $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlErrno = curl_errno($ch);
+        $curlError = curl_error($ch);
+        curl_close($ch);
+
+        if ($response === false || $curlErrno === CURLE_OPERATION_TIMEDOUT) {
+            PrestaShopLogger::addLog(
+                'Tamara pre-checkout eligibility timeout/error: '
+                . json_encode([
+                    'curl_errno' => $curlErrno,
+                    'curl_error' => $curlError,
+                    'http_code' => $httpCode,
+                ])
+            );
+
+            return 'timeout';
+        }
+
+        if ($httpCode !== 200) {
+            PrestaShopLogger::addLog(
+                'Tamara pre-checkout eligibility HTTP error: '
+                . json_encode([
+                    'http_code' => $httpCode,
+                    'response' => $response,
+                ])
+            );
+
+            return 'timeout';
+        }
+
+        $decoded = json_decode($response, true);
+        if (!is_array($decoded) || !array_key_exists('is_eligible', $decoded)) {
+            PrestaShopLogger::addLog(
+                'Tamara pre-checkout eligibility invalid response: '
+                . json_encode([
+                    'http_code' => $httpCode,
+                    'response' => $response,
+                ])
+            );
+
+            return 'timeout';
+        }
+
+        $result = $decoded['is_eligible'] ? 'eligible' : 'ineligible';
+
+        PrestaShopLogger::addLog(
+            'Tamara pre-checkout eligibility result: '
+            . json_encode([
+                'result' => $result,
+                'is_eligible' => (bool) $decoded['is_eligible'],
+                'response' => $decoded,
+            ])
+        );
+
+        return $result;
+    }
+
+    private function buildPaymentOptionsCacheKey($countryIso, $amount, $phone, $eligibilityStatus)
+    {
+        return sprintf(
+            'tmr_po_%s_%s_%s_%s',
+            strtoupper($countryIso),
+            (int) round((float) $amount * 100),
+            $this->removeSpecialCharacters($phone),
+            $eligibilityStatus
+        );
+    }
+
+    private function getUnavailableTamaraPaymentOption()
+    {
+        $logoURL = $this->getTamaraLogoUrl();
+
+        $option = new PaymentOption();
+        $option
+            ->setModuleName($this->name)
+            ->setCallToActionText($this->l('Tamara option is not available right now.', 'tamaraprestashop'))
+            ->setLogo(Media::getMediaPath($logoURL))
+            ->setAdditionalInformation(
+                $this->fetch('module:tamaraprestashop/views/templates/front/payment_option_unavailable.tpl')
+            );
+
+        return $option;
+    }
+
+    private function buildPaymentOptionsFromCache(array $payment_options, $amount, $single_checkout_enabled = null, $payment_options_count = null)
+    {
+        if ($single_checkout_enabled === null) {
+            $single_checkout_enabled = $this->context->cookie->__get('single_checkout_enabled');
+        }
+        if ($payment_options_count === null) {
+            $payment_options_count = count($payment_options);
+        }
+
+        $result = [];
+        foreach ($payment_options as $index) {
+            foreach ($index as $ind) {
+                $result[] = $this->getExternalPaymentOption(
+                    $amount,
+                    $ind[0],
+                    $ind[1],
+                    $ind[2],
+                    $ind[3],
+                    $single_checkout_enabled,
+                    $payment_options_count
+                );
+            }
+        }
+
+        return $result;
+    }
+
+    private function fetchTamaraPaymentOptions(Cart $cart, Address $address, $eligibilityStatus = 'skipped')
+    {
+        $client_country = new Country((int) $address->id_country);
+        $amount = (float) $cart->getOrderTotal(true, Cart::BOTH);
+        $phone = $this->getCustomerPhone($address, $this->context->currency->iso_code);
+        $cacheKey = $this->buildPaymentOptionsCacheKey(
+            $client_country->iso_code,
+            $amount,
+            $phone,
+            $eligibilityStatus
+        );
+
+        if (
+            $eligibilityStatus !== 'ineligible'
+            && $this->context->cookie->__isset($cacheKey)
+            && $this->context->cookie->__isset('tmr-payment-options-cookie-time')
+            && (time() - (int) $this->context->cookie->__get('tmr-payment-options-cookie-time') < self::PAYMENT_OPTIONS_CACHE_TTL)
+        ) {
+            $cached = json_decode($this->context->cookie->__get($cacheKey), true);
+            if (is_array($cached) && !empty($cached)) {
+                return $this->buildPaymentOptionsFromCache($cached, $amount);
+            }
+        }
+
+        $payload = [
+            'country' => $client_country->iso_code,
+            'order_value' => [
+                'amount' => $amount,
+                'currency' => $this->context->currency->iso_code,
+            ],
+            'phone_number' => $phone,
+            'is_vip' => true,
+        ];
+
+        $precheckEndpoint = $this->getMode('checkout/payment-options-pre-check');
+        $this->context->cookie->__set('total', (string) $amount);
+        $this->context->cookie->write();
+
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $precheckEndpoint);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
+        curl_setopt($ch, CURLOPT_HTTPHEADER, [
+            'Content-Type: application/json',
+            'Authorization: Bearer ' . TamaraConfiguration::get('api_token'),
+        ]);
+        $response = curl_exec($ch);
+        curl_close($ch);
+
+        PrestaShopLogger::addLog('payment-options-pre-check res: ' . $response);
+        $res_decoded = json_decode($response, true);
+
+        if (!is_array($res_decoded) || empty($res_decoded['has_available_payment_options'])) {
+            return [];
+        }
+
+        $single_checkout_enabled = $res_decoded['single_checkout_enabled'];
+        $this->context->cookie->__set('single_checkout_enabled', $single_checkout_enabled);
+        $this->context->cookie->write();
+
+        $payment_options = [];
+        $counter = 1;
+
+        foreach ($res_decoded['available_payment_labels'] as $value) {
+            foreach ($value as $k => $v) {
+                if ($k === 'payment_type') {
+                    ${"payment_type$counter"} = $v;
+                }
+                if ($k === 'instalment') {
+                    ${"instalment$counter"} = $v;
+                }
+                if ($k === 'description_en') {
+                    ${"description_en$counter"} = $v;
+                }
+                if ($k === 'description_ar') {
+                    ${"description_ar$counter"} = $v;
+                }
+            }
+            ++$counter;
+        }
+
+        for ($i = 1; $i < $counter; ++$i) {
+            $payment_options[] = [
+                $i => [
+                    ${"payment_type$i"},
+                    ${"instalment$i"},
+                    ${"description_en$i"},
+                    ${"description_ar$i"},
+                ],
+            ];
+        }
+
+        $this->context->cookie->__set($cacheKey, json_encode($payment_options));
+        $this->context->cookie->__set('tmr-payment-options-cookie-time', time());
+        $this->context->cookie->write();
+
+        return $this->buildPaymentOptionsFromCache(
+            $payment_options,
+            $amount,
+            $single_checkout_enabled,
+            count($payment_options)
+        );
+    }
+
     public function hookPaymentOptions($params)
     {
-        if (!$this->active) {
+        if (!$this->active || !$this->checkCurrency($params['cart'])) {
             return;
         }
 
-        if (!$this->checkCurrency($params['cart'])) {
-            return;
+        $cart = $params['cart'];
+        $address = new Address((int) $cart->id_address_delivery);
+        $customer = new Customer((int) $cart->id_customer);
+        $amount = (float) $cart->getOrderTotal(true, Cart::BOTH);
+        $currency = $this->context->currency->iso_code;
+        $phone = $this->getCustomerPhone($address, $currency);
+
+        if ($phone === '') {
+            return $this->fetchTamaraPaymentOptions($cart, $address, 'skipped');
         }
 
-        $address = new Address((int)$this->context->cart->id_address_delivery);
-        $client_country = new Country($address->id_country);
-        $paymentOptionsCacheKey = sprintf("%s_%s_%s_%s", $client_country->iso_code, (float)$this->context->cart->getOrderTotal(true, Cart::BOTH) * 100, $this->removeSpecialCharacters($address->phone), '1');
-        if ($this->context->cookie->__isset($paymentOptionsCacheKey)
-            && $this->context->cookie->__isset('tmr-payment-options-cookie-time')
-            && (time() - intval($this->context->cookie->__get('tmr-payment-options-cookie-time')) < 300)
-        ) {
-            $PO = json_decode($this->context->cookie->__get($paymentOptionsCacheKey), true);
-            $PO2 = [];
-            foreach ($PO as $index) {
-                foreach ($index as $ind) {
-                    array_push($PO2, $this->getExternalPaymentOption((float)$this->context->cart->getOrderTotal(true, Cart::BOTH), $ind[0], $ind[1], $ind[2], $ind[3], $this->context->cookie->__get('single_checkout_enabled'), count($PO)));
-                }
-            }
-            return $PO2;
-        } else {
-            $address = new Address((int)$this->context->cart->id_address_delivery);
-            $client_country = new Country($address->id_country);
-            $payload = array(
-                "country" => $client_country->iso_code,
-                "order_value" => array(
-                    "amount" => (float)$this->context->cart->getOrderTotal(true, Cart::BOTH),
-                    "currency" => $this->context->currency->iso_code
-                ),
-                "phone_number" => $address->phone,
-                "is_vip" => true
-            );
-            $param = "checkout/payment-options-pre-check";
-            $precheckEndpoint = $this->getMode($param);
-            $total = "";
-            foreach ($payload["order_value"] as $k => $v) {
-                if ($k == 'amount')
-                    $total .= $v;
-            }
-            $this->context->cookie->__set('total', $total);
-            $this->context->cookie->write();
-            $ch = curl_init();
-            curl_setopt($ch, CURLOPT_URL, $precheckEndpoint);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-            curl_setopt(
-                $ch, CURLOPT_HTTPHEADER,
-                array(
-                    'Content-Type: application/json',
-                    'Authorization: Bearer ' . Tools::getValue('api_token', TamaraConfiguration::get('api_token')),
-                )
-            );
-            $response = curl_exec($ch);
-            PrestaShopLogger::addLog("payment-options-pre-check res: " . $response);
-            $res_decoded = json_decode($response, true);
-            curl_close($ch);
-            $single_checkout_enabled = $res_decoded['single_checkout_enabled'];
-            $this->context->cookie->__set('single_checkout_enabled', $single_checkout_enabled);
-            $this->context->cookie->write();
-            if ($res_decoded['has_available_payment_options'] == 1) {
-                $labels = $res_decoded['available_payment_labels'];
+        $email = $this->getCustomerEmail($customer);
+        $eligibility = $this->checkPreCheckoutEligibility($amount, $currency, $phone, $email);
 
-                $counter = 1;
-                $payment_options = [];
-                foreach ($labels as $value) {
-                    foreach ($value as $k => $v) {
 
-                        if ($k == 'payment_type') {
-                            ${"payment_type$counter"} = $v;
-                        }
-                        if ($k == 'instalment') {
-                            ${"instalment$counter"} = $v;
-                        }
-                        if ($k == 'description_en') {
-                            ${"description_en$counter"} = $v;
-                        }
-                        if ($k == 'description_ar') {
-                            ${"description_ar$counter"} = $v;
-                        }
-                    }
-                    $counter++;
-                }
-
-                for ($i = 1; $i < $counter; $i++) {
-                    array_push($payment_options, array($i => array(${"payment_type$i"}, ${"instalment$i"}, ${"description_en$i"}, ${"description_ar$i"})));
-                }
-                $this->context->cookie->__set($paymentOptionsCacheKey, json_encode($payment_options));
-                $this->context->cookie->write();
-                $this->context->cookie->__set('tmr-payment-options-cookie-time', time());
-                $this->context->cookie->write();
-
-                $payment_options2 = [];
-                foreach ($payment_options as $index) {
-                    foreach ($index as $ind) {
-                        array_push($payment_options2, $this->getExternalPaymentOption($total, $ind[0], $ind[1], $ind[2], $ind[3], $single_checkout_enabled, count($payment_options)));
-                    }
-                }
-                return $payment_options2;
-            } else {
-                return [];
-            }
+        if ($eligibility === 'ineligible') {
+            return [$this->getUnavailableTamaraPaymentOption()];
         }
+
+        return $this->fetchTamaraPaymentOptions($cart, $address, $eligibility);
     }
 
     public function checkCurrency($cart)
@@ -764,16 +1127,12 @@ class TamaraPrestashop extends PaymentModule
 
     public function getExternalPaymentOption($total, $type, $instalment, $desc_en, $desc_ar, $single_checkout_enabled, $payment_options_count)
     {
-        $label = "";
-        $logoURL = "";
-        if ($this->context->language->iso_code == 'ar') {
-            $logoURL .= 'https://cdn.tamara.co/widget-v2/assets/tamara-grad-ar.ab6b918f.svg';
-            $label .= $desc_ar;
-        } elseif ($this->context->language->iso_code == 'en') {
-            $logoURL .= 'https://cdn.tamara.co/widget-v2/assets/tamara-grad-en.a044e01d.svg';
-            $label .= $desc_en;
-        }
+        $countryIso = $this->getMerchantCountryIso();
+        $logoURL = $this->getTamaraLogoUrl();
+        $label = $this->getPaymentLabelForDisplay($countryIso, true, $this->context->currency->iso_code);
+
         $externalOption = new PaymentOption();
+        $externalOption->setModuleName($this->name);
         $this->context->smarty->assign('total', $total);
         $this->context->smarty->assign('instalment', $instalment);
         $this->context->smarty->assign('public_key', Tools::getValue('public_key', TamaraConfiguration::get('public_key')));
